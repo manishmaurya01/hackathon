@@ -1,0 +1,11 @@
+Field Notes — River Survey, 14 March
+
+Got to the site around 6:40, which was later than I wanted. The path in from the north gate is still washed out so we had to go the long way round past the pump house, adding maybe twenty minutes. Water level was higher than the January reading — I'd guessed knee-deep and it was closer to mid-thigh, which made the wading samples awkward.
+
+Sam took the turbidity readings while I did the core tubes. Three of the four tubes sealed properly; the fourth one leaked in the bag, so that replicate is probably junk. I'm annoyed because it was the deep point. Next time bring the spare caps, the ones that actually fit.
+
+Noticed a lot of orange film on the rocks near the outflow. Could be iron bacteria, could be runoff from whatever is happening upstream of the culvert. Didn't have a kit to test it properly. Wrote it down, took two photos, both came out blurry because of the light.
+
+Drive back took an hour because of the diversion at the bridge. Uploaded the data tonight but the turbidity column for sample 03 looks wrong — values are all identical, which usually means the meter didn't auto-range. Will recheck against the raw file tomorrow before I put anything in the report.
+
+Anyway. Not a bad day, just not the clean set I was hoping for.
