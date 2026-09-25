@@ -7,6 +7,7 @@ import authRoutes from './routes/auth.routes.js';
 import analysisRoutes from './routes/analysis.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
+import copyleaksRoutes from './routes/copyleaks.routes.js';
 import { notFound, errorHandler } from './middleware/error.js';
 
 const app = express();
@@ -19,9 +20,42 @@ app.use(
   })
 );
 
+// Collect all configured origins from environment variables and defaults
+const configuredOrigins = [
+  env.FRONTEND_URL,
+  env.CLIENT_URL,
+  process.env.FRONTEND_URL,
+  process.env.CLIENT_URL,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]
+  .flatMap((url) => (url ? String(url).split(',') : []))
+  .map((url) => url.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const allowedOriginsSet = new Set(configuredOrigins);
+
 app.use(
   cors({
-    origin: [env.CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: (origin, callback) => {
+      // Allow non-browser requests (curl, server-to-server, Copyleaks webhooks)
+      if (!origin) return callback(null, true);
+
+      const cleanOrigin = origin.replace(/\/+$/, '');
+      if (allowedOriginsSet.has(cleanOrigin) || allowedOriginsSet.has('*')) {
+        return callback(null, true);
+      }
+
+      // In development, allow any localhost port
+      if (env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin)) {
+        return callback(null, true);
+      }
+
+      // Disallow without crashing server
+      return callback(null, false);
+    },
     credentials: true,
   })
 );
@@ -39,6 +73,7 @@ app.get('/api/health', (req, res) => {
       timestamp: new Date().toISOString(),
       model: env.OPENROUTER_MODEL,
       aiConfigured: Boolean(env.OPENROUTER_API_KEY),
+      copyleaksConfigured: Boolean(env.COPYLEAKS_API_KEY && env.COPYLEAKS_EMAIL),
       maxFileSize: env.MAX_FILE_SIZE,
       environment: env.NODE_ENV,
     },
@@ -49,6 +84,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/analysis', analysisRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/copyleaks', copyleaksRoutes);
 
 app.use('/api', (req, res, next) => {
   notFound(req, res, next);

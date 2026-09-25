@@ -42,6 +42,9 @@ export function errorHandler(err, req, res, next) {
 
   if (statusCode >= 500 && !(err instanceof ApiError)) {
     console.error('[error]', err.stack || err);
+    if (env.NODE_ENV === 'production') {
+      message = 'Internal server error. Please try again later.';
+    }
   }
 
   const body = { success: false, message, code: code || 'ERROR' };

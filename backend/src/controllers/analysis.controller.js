@@ -16,7 +16,7 @@ const MIN_WORDS = 15;
 /**
  * Derive overall status from AI and plagiarism signals
  */
-function deriveOverallStatus(aiLikelihood, plagiarismCategory, signals, plagiarismEvidence) {
+export function deriveOverallStatus(aiLikelihood, plagiarismCategory, signals, plagiarismEvidence) {
   const hasHighPlagiarism = plagiarismCategory === 'High' || plagiarismCategory === 'Very High';
   const hasHighAI = aiLikelihood === 'High' || aiLikelihood === 'Elevated';
   const hasHighSeveritySignal = signals.some((s) => s.severity === 'high');
@@ -146,12 +146,18 @@ async function runAnalysis({ userId, inputType, fileName, rawText }) {
     // Plagiarism fields
     if (plagiarismAnalysis) {
       report.plagiarismScore = plagiarismAnalysis.score;
-      report.plagiarismCategory = plagiarismAnalysis.category || 'Low';
+      report.plagiarismCategory =
+        plagiarismAnalysis.plagiarismCategory ||
+        plagiarismAnalysis.category ||
+        (plagiarismAnalysis.status === 'processing' ? 'Pending' : 'Low');
       report.sourcesFound = plagiarismAnalysis.sourcesFound;
       report.matchedSections = plagiarismAnalysis.matchedSections;
       report.highestMatch = plagiarismAnalysis.highestMatch;
-      report.plagiarismSources = plagiarismAnalysis.sources;
-      report.plagiarismEvidence = plagiarismAnalysis.evidence;
+      report.plagiarismSources = plagiarismAnalysis.sources || [];
+      report.plagiarismEvidence = plagiarismAnalysis.evidence || [];
+      if (Array.isArray(plagiarismAnalysis.scanIds) && plagiarismAnalysis.scanIds.length) {
+        report.scanIds = plagiarismAnalysis.scanIds;
+      }
     }
 
     // Style analysis fields
@@ -204,11 +210,15 @@ export const createAnalysis = asyncHandler(async (req, res) => {
 
   const report = await runAnalysis({ userId: req.user._id, inputType, fileName, rawText });
 
+  const reportObj = report.toObject();
+  reportObj.confidence = report.aiConfidence || reportObj.confidence;
+  reportObj.summary = report.aiSummary || reportObj.summary;
+
   return ok(
     res,
     {
       reportId: report._id.toString(),
-      report: report.toObject(),
+      report: reportObj,
       status: report.status,
     },
     'Analysis complete.'

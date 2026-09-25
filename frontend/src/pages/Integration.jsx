@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Plug, Copy, Check, KeyRound, Webhook, Boxes, GraduationCap, Terminal } from 'lucide-react';
 import CodeBlock from '../components/CodeBlock.jsx';
 import { useAuth } from '../hooks/useAuth.jsx';
+import { BASE_URL } from '../services/api.js';
 
-const REQUEST_EXAMPLE = `curl -X POST http://localhost:5000/api/analysis \\
+const REQUEST_EXAMPLE = `curl -X POST ${BASE_URL}/analysis \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer <YOUR_JWT_TOKEN>" \\
   -d '{
@@ -127,11 +128,11 @@ export default function Integration() {
           </div>
           <div className="mt-3 flex items-center gap-2">
             <code className="flex-1 rounded-lg border border-ink-200 bg-ink-50 px-3.5 py-2.5 font-mono text-[13px] text-ink-700">
-              http://localhost:5000/api
+              {BASE_URL}
             </code>
             <button
               type="button"
-              onClick={() => copyValue('http://localhost:5000/api', 'base')}
+              onClick={() => copyValue(BASE_URL, 'base')}
               className="btn-secondary !px-3 !py-2.5"
               aria-label="Copy base URL"
             >

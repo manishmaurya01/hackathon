@@ -124,12 +124,13 @@ const reportSchema = new mongoose.Schema(
 
     // Plagiarism Analysis
     plagiarismScore: { type: Number, default: 0, min: 0, max: 100 },
-    plagiarismCategory: { type: String, enum: ['Low', 'Moderate', 'High', 'Very High', null], default: null },
+    plagiarismCategory: { type: String, enum: ['Low', 'Moderate', 'High', 'Very High', 'Pending', null], default: null },
     sourcesFound: { type: Number, default: 0 },
     matchedSections: { type: Number, default: 0 },
     highestMatch: { type: Number, default: 0 },
     plagiarismSources: { type: [plagiarismSourceSchema], default: [] },
     plagiarismEvidence: { type: [plagiarismEvidenceSchema], default: [] },
+    scanIds: { type: [String], default: [] },
 
     // Style Analysis
     styleAnalysis: { type: styleAnalysisSchema, default: {} },

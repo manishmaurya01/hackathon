@@ -395,18 +395,22 @@ export async function submitScan({
   };
 
   /*
-   * Only add webhook when an actual webhook URL
-   * has been configured.
-   *
-   * Do not automatically create localhost webhook URLs.
+   * Configure webhook callback URL for asynchronous scan notifications.
+   * Copyleaks interpolates {STATUS} (e.g. completed, error, creditsChecked).
    */
-  if (
-    webhookUrl &&
-    typeof webhookUrl === "string" &&
-    webhookUrl.trim()
-  ) {
+  const effectiveWebhookUrl = (
+    webhookUrl ||
+    (await getEnv()).COPYLEAKS_WEBHOOK_URL ||
+    ""
+  ).trim();
+
+  if (effectiveWebhookUrl) {
+    let formattedWebhookUrl = effectiveWebhookUrl;
+    if (!formattedWebhookUrl.includes("{STATUS}")) {
+      formattedWebhookUrl = `${formattedWebhookUrl.replace(/\/+$/, "")}/{STATUS}`;
+    }
     properties.webhooks = {
-      status: webhookUrl,
+      status: formattedWebhookUrl,
     };
   }
 
@@ -940,6 +944,7 @@ export async function analyzePlagiarismWithCopyleaks({
    * This is much faster than the old sequential
    * submission implementation.
    */
+  const currentEnv = await getEnv();
   const submissions =
     await Promise.all(
       chunks.map(
@@ -949,6 +954,9 @@ export async function analyzePlagiarismWithCopyleaks({
 
             fileName:
               `plagiarism-${index + 1}.txt`,
+
+            webhookUrl:
+              currentEnv.COPYLEAKS_WEBHOOK_URL,
           })
       )
     );

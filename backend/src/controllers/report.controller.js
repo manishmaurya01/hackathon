@@ -26,7 +26,7 @@ export const listReports = asyncHandler(async (req, res) => {
     .limit(Math.min(Number(limit) || 200, 500))
     // Summary rows never need the full assignment body — it can be 60k chars.
     .select(
-      'fileName inputType status overallStatus aiLikelihood confidence plagiarismScore plagiarismCategory sectionsFlagged wordCount summary error createdAt updatedAt'
+      'fileName inputType status overallStatus aiLikelihood aiConfidence confidence plagiarismScore plagiarismCategory sectionsFlagged wordCount aiSummary summary error createdAt updatedAt'
     )
     .lean();
 
@@ -41,18 +41,32 @@ export const listReports = asyncHandler(async (req, res) => {
         (r.aiLikelihood || '').toLowerCase().includes(needle) ||
         (r.plagiarismCategory || '').toLowerCase().includes(needle) ||
         (r.inputType || '').toLowerCase().includes(needle) ||
-        (r.summary || '').toLowerCase().includes(needle)
+        (r.aiSummary || r.summary || '').toLowerCase().includes(needle)
     );
   }
 
-  return ok(res, { reports: reports.map((r) => ({ ...r, id: r._id.toString() })) });
+  return ok(res, {
+    reports: reports.map((r) => ({
+      ...r,
+      confidence: r.aiConfidence || r.confidence,
+      summary: r.aiSummary || r.summary,
+      id: r._id.toString(),
+    })),
+  });
 });
 
 export const getReport = asyncHandler(async (req, res) => {
   const report = await Report.findOne({ _id: req.params.id, userId: req.user._id }).lean();
   if (!report) throw new ApiError(404, 'Report not found.');
 
-  return ok(res, { report: { ...report, id: report._id.toString() } });
+  return ok(res, {
+    report: {
+      ...report,
+      confidence: report.aiConfidence || report.confidence,
+      summary: report.aiSummary || report.summary,
+      id: report._id.toString(),
+    },
+  });
 });
 
 export const deleteReport = asyncHandler(async (req, res) => {

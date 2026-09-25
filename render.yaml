@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: veriwrite-ai-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: FRONTEND_URL
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-4o-mini
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: COPYLEAKS_AUTH_URL
+        value: https://id.copyleaks.com
+      - key: COPYLEAKS_API_URL
+        value: https://api.copyleaks.com
+      - key: COPYLEAKS_API_KEY
+        sync: false
+      - key: COPYLEAKS_EMAIL
+        sync: false
+      - key: COPYLEAKS_SANDBOX
+        value: "false"
+      - key: COPYLEAKS_WEBHOOK_URL
+        sync: false
+      - key: MAX_FILE_SIZE
+        value: 5242880
