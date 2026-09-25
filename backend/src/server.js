@@ -19,10 +19,14 @@ async function main() {
     console.warn('[auth] JWT_SECRET is not set — auth requests will fail.');
   }
 
-  const server = app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, '0.0.0.0', () => {
+    const address = server.address();
     console.log(`[server] VeriWrite AI API listening on http://localhost:${env.PORT}/api`);
+    console.log(`[server] bound to:`, address);
     console.log(`[server] model: ${env.OPENROUTER_MODEL}`);
     console.log(`[server] client: ${env.CLIENT_URL}`);
+  }).on('error', (err) => {
+    console.error('[server] listen error:', err);
   });
 
   const shutdown = (signal) => () => {

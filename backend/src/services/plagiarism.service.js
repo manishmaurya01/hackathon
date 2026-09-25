@@ -1,379 +1,383 @@
 /**
- * Plagiarism detection service.
- * Orchestrates the pipeline: segment text -> search sources -> fetch content -> compare -> generate evidence.
+ * Plagiarism Detection Service
+ *
+ * Main application-level plagiarism service.
+ *
+ * This file acts as a wrapper around the Copyleaks service.
+ *
+ * IMPORTANT:
+ * - Copyleaks credentials stay inside backend.
+ * - Do not call Copyleaks directly from frontend.
+ * - Do not convert API failures into 0% plagiarism.
+ * - Keep the response structure compatible with the existing app.
  */
 
-import { getSearchProvider } from './search/search.provider.js';
-import { cleanText, splitIntoSections, countWords } from '../utils/text.js';
-import ApiError from '../utils/ApiError.js';
-import { analyzeAssignment } from './openrouter.service.js';
+import {
+  analyzePlagiarismWithCopyleaks,
+  calculateTextStatistics,
+  getSimilarityCategory,
+} from "./copyleaks.service.js";
+
+/* =========================================================
+   MAIN PLAGIARISM ANALYSIS
+   ========================================================= */
 
 /**
- * Split text into sentences
+ * Analyze plagiarism for the supplied sections.
+ *
+ * @param {Object} params
+ * @param {Array} params.sections
+ * @param {number} params.wordCount
+ *
+ * @returns {Promise<Object>}
  */
-function splitIntoSentences(text) {
-  // Basic sentence splitting - handles common cases
-  const sentences = text
-    .replace(/\r\n/g, '\n')
-    .replace(/\n+/g, ' ')
-    .split(/(?<=[.!?])\s+(?=[A-Z])/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 20); // Filter out very short fragments
+export async function analyzePlagiarism({
+  sections,
+  wordCount,
+}) {
+  /* -------------------------------------------------------
+     Validate input
+     ------------------------------------------------------- */
 
-  return sentences;
-}
-
-/**
- * Select important sentences/phrases for searching
- * Avoids trivial/common sentences
- */
-function selectSearchPhrases(sentences, maxPhrases = 10) {
-  // Score sentences by:
-  // 1. Length (longer = more distinctive)
-  // 2. Presence of specific nouns/terms
-  // 3. Uniqueness (avoid common phrases)
-
-  const scored = sentences.map((sentence) => {
-    const words = sentence.toLowerCase().split(/\s+/);
-    const uniqueWords = new Set(words);
-    const diversity = uniqueWords.size / words.length;
-
-    // Boost score for sentences with numbers, proper nouns, technical terms
-    const hasNumbers = /\d/.test(sentence);
-    const hasCapitalizedWords = /\b[A-Z][a-z]+\b/.test(sentence);
-    const hasTechnicalTerms = /\b(algorithm|framework|methodology|analysis|implementation|architecture|infrastructure|optimization|computational|statistical|empirical|theoretical|methodology|hypothesis|variable|correlation|regression|classification|clustering|neural|network|model|dataset|training|inference)\b/i.test(sentence);
-
-    let score = sentence.length * 0.1 + diversity * 50;
-    if (hasNumbers) score += 10;
-    if (hasCapitalizedWords) score += 5;
-    if (hasTechnicalTerms) score += 20;
-
-    // Penalize very common academic phrases
-    const commonPhrases = [
-      'it is important to note',
-      'in conclusion',
-      'furthermore',
-      'moreover',
-      'additionally',
-      'however',
-      'therefore',
-      'consequently',
-      'plays a crucial role',
-      'in today',
-      'landscape',
-      'realm',
-      'delve',
-      'tapestry',
-    ];
-    const lower = sentence.toLowerCase();
-    for (const phrase of commonPhrases) {
-      if (lower.includes(phrase)) score -= 15;
-    }
-
-    return { sentence, score };
-  });
-
-  // Sort by score descending and take top phrases
-  scored.sort((a, b) => b.score - a.score);
-
-  // Also include some longer phrases by combining adjacent sentences
-  const phrases = scored.slice(0, maxPhrases).map((s) => s.sentence);
-
-  return phrases;
-}
-
-/**
- * Calculate text similarity between two strings
- */
-function calculateSimilarity(text1, text2) {
-  // 1. Jaccard similarity on words
-  const words1 = new Set(text1.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-  const words2 = new Set(text2.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-
-  const intersection = new Set([...words1].filter((w) => words2.has(w)));
-  const union = new Set([...words1, ...words2]);
-
-  const jaccard = union.size > 0 ? intersection.size / union.size : 0;
-
-  // 2. N-gram overlap (3-grams)
-  function getNgrams(text, n = 3) {
-    const words = text.toLowerCase().split(/\s+/);
-    const ngrams = new Set();
-    for (let i = 0; i <= words.length - n; i++) {
-      ngrams.add(words.slice(i, i + n).join(' '));
-    }
-    return ngrams;
+  if (!Array.isArray(sections)) {
+    throw new Error(
+      "Invalid plagiarism input: sections must be an array"
+    );
   }
 
-  const ngrams1 = getNgrams(text1);
-  const ngrams2 = getNgrams(text2);
-  const ngramIntersection = new Set([...ngrams1].filter((n) => ngrams2.has(n)));
-  const ngramUnion = new Set([...ngrams1, ...ngrams2]);
-  const ngramOverlap = ngramUnion.size > 0 ? ngramIntersection.size / ngramUnion.size : 0;
+  if (sections.length === 0) {
+    throw new Error(
+      "Invalid plagiarism input: no sections provided"
+    );
+  }
 
-  // 3. Longest common substring ratio
-  function lcsRatio(s1, s2) {
-    const m = s1.length;
-    const n = s2.length;
-    let maxLen = 0;
-    const dp = Array(n + 1).fill(0);
-
-    for (let i = 1; i <= m; i++) {
-      for (let j = n; j >= 1; j--) {
-        if (s1[i - 1] === s2[j - 1]) {
-          dp[j] = dp[j - 1] + 1;
-          maxLen = Math.max(maxLen, dp[j]);
-        } else {
-          dp[j] = 0;
-        }
+  /*
+   * Make sure sections contain usable text.
+   */
+  const validSections = sections.filter(
+    (section) => {
+      if (typeof section === "string") {
+        return section.trim().length > 0;
       }
+
+      return (
+        section &&
+        typeof section.text === "string" &&
+        section.text.trim().length > 0
+      );
     }
-    return maxLen / Math.max(m, n);
+  );
+
+  if (validSections.length === 0) {
+    throw new Error(
+      "Invalid plagiarism input: no text found in sections"
+    );
   }
 
-  const lcs = lcsRatio(text1, text2);
+  /* -------------------------------------------------------
+     Calculate word count if not supplied
+     ------------------------------------------------------- */
 
-  // Weighted combination
-  const combined = jaccard * 0.3 + ngramOverlap * 0.4 + lcs * 0.3;
+  let finalWordCount = Number(wordCount);
 
-  return {
-    jaccard: Math.round(jaccard * 10000) / 100,
-    ngramOverlap: Math.round(ngramOverlap * 10000) / 100,
-    lcs: Math.round(lcs * 10000) / 100,
-    combined: Math.round(combined * 10000) / 100,
-  };
-}
-
-/**
- * Determine match type based on similarity scores
- */
-function getMatchType(similarity) {
-  if (similarity.lcs > 70 && similarity.jaccard > 50) return 'near-exact';
-  if (similarity.ngramOverlap > 40) return 'high-similarity';
-  if (similarity.combined > 30) return 'semantic';
-  return 'low';
-}
-
-/**
- * Main plagiarism analysis function
- */
-export async function analyzePlagiarism({ sections, wordCount }) {
-  const provider = getSearchProvider();
-  const fullText = sections.map((s) => s.text).join('\n\n');
-  const sentences = splitIntoSentences(fullText);
-  const searchPhrases = selectSearchPhrases(sentences, 12);
-
-  const allSources = [];
-  const allEvidence = [];
-  const processedUrls = new Set();
-
-  // Search for each phrase
-  for (const phrase of searchPhrases) {
-    try {
-      const results = await provider.search(phrase, 3);
-
-      for (const result of results) {
-        if (!result.url || processedUrls.has(result.url)) continue;
-        processedUrls.add(result.url);
-
-        // Fetch full content if available
-        let sourceContent = result.content || result.snippet || '';
-        if (!sourceContent || sourceContent.length < 50) {
-          try {
-            sourceContent = await provider.fetchContent(result.url);
-          } catch {
-            // Ignore fetch errors, use snippet
-          }
+  if (
+    !Number.isFinite(finalWordCount) ||
+    finalWordCount <= 0
+  ) {
+    const fullText = validSections
+      .map((section) => {
+        if (typeof section === "string") {
+          return section;
         }
 
-        if (!sourceContent || sourceContent.length < 50) continue;
+        return section.text;
+      })
+      .join("\n\n");
 
-        // Compare with student text
-        const similarity = calculateSimilarity(phrase, sourceContent);
+    finalWordCount =
+      calculateTextStatistics(
+        fullText
+      ).wordCount;
+  }
 
-        if (similarity.combined >= 25) {
-          // Find which section this phrase belongs to
-          let matchedSection = 1;
-          for (const section of sections) {
-            if (section.text.toLowerCase().includes(phrase.toLowerCase().slice(0, 50))) {
-              matchedSection = section.index;
-              break;
-            }
-          }
+  /* -------------------------------------------------------
+     Call Copyleaks
+     ------------------------------------------------------- */
 
-          const evidence = {
-            section: matchedSection,
-            studentText: phrase.slice(0, 300),
-            sourceText: sourceContent.slice(0, 300),
-            sourceTitle: result.title,
-            sourceUrl: result.url,
-            sourceDomain: new URL(result.url).hostname,
-            similarity: similarity.combined,
-            matchType: getMatchType(similarity),
-            explanation: generateExplanation(similarity, phrase, sourceContent),
-          };
+  try {
+    console.log(
+      `[Plagiarism] Starting analysis for ${finalWordCount} words`
+    );
 
-          allEvidence.push(evidence);
+    const result =
+      await analyzePlagiarismWithCopyleaks({
+        sections: validSections,
+        wordCount: finalWordCount,
+      });
 
-          // Track unique sources
-          if (!allSources.some((s) => s.url === result.url)) {
-            allSources.push({
-              title: result.title,
-              url: result.url,
-              domain: new URL(result.url).hostname,
-              matchCount: 0,
-              maxSimilarity: 0,
-            });
-          }
+    if (!result) {
+      throw new Error(
+        "Copyleaks returned an empty result"
+      );
+    }
 
-          // Update source stats
-          const source = allSources.find((s) => s.url === result.url);
-          if (source) {
-            source.matchCount++;
-            source.maxSimilarity = Math.max(source.maxSimilarity, similarity.combined);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`Search failed for phrase: ${phrase.slice(0, 50)}...`, err.message);
-      // Continue with other phrases
+    /* -----------------------------------------------------
+       Handle asynchronous/pending result
+       ----------------------------------------------------- */
+
+    if (
+      result.status === "processing" ||
+      result.status === "pending"
+    ) {
+      return {
+        score: 0,
+
+        plagiarismCategory:
+          "Pending",
+
+        sourcesFound:
+          Number(result.sourcesFound) || 0,
+
+        matchedSections:
+          Number(result.matchedSections) || 0,
+
+        highestMatch:
+          Number(result.highestMatch) || 0,
+
+        sources:
+          Array.isArray(result.sources)
+            ? result.sources
+            : [],
+
+        evidence:
+          Array.isArray(result.evidence)
+            ? result.evidence
+            : [],
+
+        status: "processing",
+
+        scanIds:
+          Array.isArray(result.scanIds)
+            ? result.scanIds
+            : [],
+
+        message:
+          result.message ||
+          "Plagiarism scan is still being processed.",
+      };
+    }
+
+    /* -----------------------------------------------------
+       Normalize successful result
+       ----------------------------------------------------- */
+
+    const score = normalizeScore(
+      result.score
+    );
+
+    const category =
+      result.category ||
+      getSimilarityCategory(score);
+
+    const sources =
+      Array.isArray(result.sources)
+        ? result.sources
+        : [];
+
+    const evidence =
+      Array.isArray(result.evidence)
+        ? result.evidence
+        : [];
+
+    const sourcesFound =
+      Number.isFinite(
+        Number(result.sourcesFound)
+      )
+        ? Number(result.sourcesFound)
+        : sources.length;
+
+    const matchedSections =
+      Number.isFinite(
+        Number(result.matchedSections)
+      )
+        ? Number(result.matchedSections)
+        : new Set(
+            evidence
+              .map(
+                (item) =>
+                  item.section
+              )
+              .filter(Boolean)
+          ).size;
+
+    const highestMatch =
+      Number.isFinite(
+        Number(result.highestMatch)
+      )
+        ? normalizeScore(
+            result.highestMatch
+          )
+        : calculateHighestMatch(
+            evidence
+          );
+
+    const finalResult = {
+      score,
+
+      plagiarismCategory:
+        category,
+
+      sourcesFound,
+
+      matchedSections,
+
+      highestMatch,
+
+      sources,
+
+      evidence,
+
+      status:
+        result.status ||
+        "completed",
+
+      scanIds:
+        Array.isArray(result.scanIds)
+          ? result.scanIds
+          : [],
+    };
+
+    console.log(
+      `[Plagiarism] Analysis completed: ${score}%`
+    );
+
+    return finalResult;
+  } catch (error) {
+    /*
+     * IMPORTANT:
+     *
+     * DO NOT return:
+     *
+     * score: 0
+     * category: Low
+     *
+     * because that would incorrectly tell the
+     * frontend that the document has zero plagiarism.
+     *
+     * A failed API call is NOT a plagiarism score.
+     */
+
+    console.error(
+      "[Plagiarism] Analysis failed:",
+      error?.message ||
+        "Unknown error"
+    );
+
+    throw new Error(
+      `Plagiarism analysis failed: ${
+        error?.message ||
+        "Unknown error"
+      }`
+    );
+  }
+}
+
+/* =========================================================
+   SCORE NORMALIZATION
+   ========================================================= */
+
+/**
+ * Keep plagiarism score between 0 and 100.
+ */
+function normalizeScore(score) {
+  const numericScore =
+    Number(score);
+
+  if (
+    !Number.isFinite(
+      numericScore
+    )
+  ) {
+    return 0;
+  }
+
+  return Math.round(
+    Math.max(
+      0,
+      Math.min(
+        100,
+        numericScore
+      )
+    ) * 100
+  ) / 100;
+}
+
+/* =========================================================
+   HIGHEST MATCH
+   ========================================================= */
+
+/**
+ * Calculate highest similarity from evidence.
+ */
+function calculateHighestMatch(
+  evidence
+) {
+  if (
+    !Array.isArray(evidence) ||
+    evidence.length === 0
+  ) {
+    return 0;
+  }
+
+  let highest = 0;
+
+  for (
+    const item of evidence
+  ) {
+    const similarity =
+      Number(
+        item?.similarity
+      );
+
+    if (
+      Number.isFinite(
+        similarity
+      )
+    ) {
+      highest =
+        Math.max(
+          highest,
+          similarity
+        );
     }
   }
 
-  // Calculate overall plagiarism score
-  const plagiarismScore = calculatePlagiarismScore(allEvidence, wordCount);
-
-  // Sort evidence by similarity descending
-  allEvidence.sort((a, b) => b.similarity - a.similarity);
-  allSources.sort((a, b) => b.maxSimilarity - a.maxSimilarity);
-
-  return {
-    score: plagiarismScore,
-    sourcesFound: allSources.length,
-    matchedSections: new Set(allEvidence.map((e) => e.section)).size,
-    highestMatch: allEvidence.length > 0 ? Math.max(...allEvidence.map((e) => e.similarity)) : 0,
-    sources: allSources,
-    evidence: allEvidence,
-  };
+  return normalizeScore(
+    highest
+  );
 }
+
+/* =========================================================
+   TEXT STATISTICS
+   ========================================================= */
 
 /**
- * Calculate overall plagiarism score
+ * Calculate text statistics.
+ *
+ * Re-exported from the Copyleaks service
+ * for compatibility with existing code.
  */
-function calculatePlagiarismScore(evidence, wordCount) {
-  if (!evidence.length) return 0;
+export {
+  calculateTextStatistics,
+};
 
-  // Weight by similarity and coverage
-  let weightedSum = 0;
-  let totalWeight = 0;
-
-  for (const e of evidence) {
-    const weight = e.similarity / 100;
-    weightedSum += e.similarity * weight;
-    totalWeight += weight;
-  }
-
-  const avgSimilarity = totalWeight > 0 ? weightedSum / totalWeight : 0;
-
-  // Adjust for document length (longer docs have more chance of incidental matches)
-  const lengthFactor = Math.min(1, 1000 / Math.max(wordCount, 100));
-
-  return Math.round(Math.min(100, avgSimilarity * lengthFactor * 1.5));
-}
+/* =========================================================
+   SIMILARITY CATEGORY
+   ========================================================= */
 
 /**
- * Generate human-readable explanation for a match
+ * Re-exported from Copyleaks service.
  */
-function generateExplanation(similarity, studentText, sourceText) {
-  const type = getMatchType(similarity);
-
-  if (type === 'near-exact') {
-    return `The text closely matches the source with ${similarity.lcs.toFixed(0)}% character-level similarity. This suggests direct copying or minimal paraphrasing.`;
-  }
-  if (type === 'high-similarity') {
-    return `Significant word and phrase overlap (${similarity.ngramOverlap.toFixed(0)}% n-gram overlap) with the source. The structure and key terms are very similar.`;
-  }
-  if (type === 'semantic') {
-    return `The passage shares conceptual similarity and vocabulary with the source (${similarity.combined.toFixed(0)}% combined score), suggesting possible paraphrasing.`;
-  }
-  return `Some similarity detected but may be coincidental or due to common terminology.`;
-}
-
-/**
- * Generate similarity category label
- */
-export function getSimilarityCategory(score) {
-  if (score <= 15) return 'Low';
-  if (score <= 30) return 'Moderate';
-  if (score <= 50) return 'High';
-  return 'Very High';
-}
-
-/**
- * Lightweight text statistics for style analysis
- */
-export function calculateTextStatistics(text) {
-  const cleaned = cleanText(text);
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  const sentences = splitIntoSentences(cleaned);
-  const paragraphs = cleaned.split(/\n\s*\n/).filter(Boolean);
-
-  // Vocabulary diversity (type-token ratio)
-  const uniqueWords = new Set(words.map((w) => w.toLowerCase()));
-  const vocabularyDiversity = words.length > 0 ? uniqueWords.size / words.length : 0;
-
-  // Sentence lengths
-  const sentenceLengths = sentences.map((s) => s.split(/\s+/).length);
-  const avgSentenceLength = sentenceLengths.length > 0
-    ? sentenceLengths.reduce((a, b) => a + b, 0) / sentenceLengths.length
-    : 0;
-
-  // Repeated phrases (3+ word sequences appearing multiple times)
-  const repeatedPhrases = findRepeatedPhrases(cleaned);
-
-  // Longest/shortest sentence
-  const longestSentence = sentences.reduce((a, b) => (a.length > b.length ? a : b), '');
-  const shortestSentence = sentences.reduce((a, b) => (a.length < b.length ? a : b), '');
-
-  // Sentence length variance (consistency measure)
-  const variance = sentenceLengths.length > 0
-    ? sentenceLengths.reduce((sum, len) => sum + Math.pow(len - avgSentenceLength, 2), 0) / sentenceLengths.length
-    : 0;
-  const sentenceLengthStdDev = Math.sqrt(variance);
-
-  return {
-    wordCount: words.length,
-    sentenceCount: sentences.length,
-    paragraphCount: paragraphs.length,
-    averageSentenceLength: Math.round(avgSentenceLength * 10) / 10,
-    vocabularyDiversity: Math.round(vocabularyDiversity * 10000) / 100,
-    repeatedPhrases: repeatedPhrases.slice(0, 10),
-    longestSentence: longestSentence.slice(0, 200),
-    shortestSentence: shortestSentence.slice(0, 200),
-    sentenceLengthStdDev: Math.round(sentenceLengthStdDev * 10) / 10,
-  };
-}
-
-/**
- * Find repeated 3+ word phrases
- */
-function findRepeatedPhrases(text) {
-  const words = text.toLowerCase().split(/\s+/);
-  const phraseCounts = new Map();
-
-  // Look for 3, 4, 5 word phrases
-  for (let n = 3; n <= 5; n++) {
-    for (let i = 0; i <= words.length - n; i++) {
-      const phrase = words.slice(i, i + n).join(' ');
-      // Skip phrases with only stop words
-      if (!/\b(the|and|or|but|in|on|at|to|for|of|with|by|a|an|is|are|was|were|be|been|have|has|had|do|does|did|will|would|could|should|may|might|must|can|this|that|these|those|it|its|their|there|here|where|when|how|why|what|who|which)\b/.test(phrase)) {
-        phraseCounts.set(phrase, (phraseCounts.get(phrase) || 0) + 1);
-      }
-    }
-  }
-
-  return [...phraseCounts.entries()]
-    .filter(([, count]) => count > 1)
-    .sort((a, b) => b[1] - a[1])
-    .map(([phrase, count]) => ({ phrase, count }));
-}
+export {
+  getSimilarityCategory,
+};

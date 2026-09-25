@@ -146,7 +146,7 @@ async function runAnalysis({ userId, inputType, fileName, rawText }) {
     // Plagiarism fields
     if (plagiarismAnalysis) {
       report.plagiarismScore = plagiarismAnalysis.score;
-      report.plagiarismCategory = plagiarismAnalysis.plagiarismCategory || 'Low';
+      report.plagiarismCategory = plagiarismAnalysis.category || 'Low';
       report.sourcesFound = plagiarismAnalysis.sourcesFound;
       report.matchedSections = plagiarismAnalysis.matchedSections;
       report.highestMatch = plagiarismAnalysis.highestMatch;
